@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulog LS-TTL · 3D</title>
+<style>
+  :root{
+    --bg:#10131a; --panel:#1b1f27; --panel2:#252a33; --line:#333a45;
+    --text:#e6e8ec; --muted:#8b93a0; --high:#e23b2e; --accent:#f5c518;
+    --font-ui:system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:var(--font-ui);color:var(--text);background:var(--bg);
+    height:100vh;overflow:hidden;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased;}
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto;z-index:5;}
+  header h1{font-size:15px;font-weight:650;letter-spacing:.3px;display:flex;align-items:baseline;gap:8px;}
+  header h1 .tag{font-family:var(--font-mono);font-size:11px;color:var(--high);}
+  .topbtns{display:flex;gap:8px;margin-left:auto;}
+  .topbtns button{font:inherit;font-size:12px;color:var(--text);background:var(--panel2);
+    border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer;}
+  .topbtns button:hover{border-color:var(--high);color:#fff;}
+  .stage{display:flex;flex:1 1 auto;min-height:0;position:relative;}
+  .palette{flex:0 0 178px;background:var(--panel);border-right:1px solid var(--line);
+    overflow-y:auto;padding:12px 10px;display:flex;flex-direction:column;gap:6px;z-index:4;}
+  .pal-group{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);
+    margin:10px 4px 3px;font-weight:700;}
+  .pal-group:first-child{margin-top:0;}
+  .pal-item{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;
+    border:1px solid var(--line);background:var(--panel2);cursor:pointer;user-select:none;}
+  .pal-item:hover{border-color:var(--high);transform:translateX(2px);}
+  .pal-glyph{width:30px;height:26px;flex:0 0 auto;border-radius:3px;background:#cfcfc8;color:#16171b;
+    display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:11px;
+    font-weight:700;border:1.5px solid #111;}
+  .pal-label{font-size:12.5px;line-height:1.15;}
+  .pal-label small{display:block;color:var(--muted);font-size:10px;}
+  #view{flex:1 1 auto;position:relative;min-width:0;}
+  #view canvas{display:block;}
+  #overlay{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:3;
+    background:rgba(20,23,30,.85);border:1px solid var(--line);border-radius:8px;
+    padding:7px 13px;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);
+    pointer-events:none;white-space:nowrap;max-width:94%;overflow:hidden;text-overflow:ellipsis;}
+  #overlay b{color:var(--accent);}
+  #loaderr{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    text-align:center;padding:30px;color:var(--muted);font-size:14px;}
+  footer{flex:0 0 auto;padding:6px 16px;background:var(--panel);border-top:1px solid var(--line);
+    font-size:11.5px;color:var(--muted);font-family:var(--font-mono);display:flex;gap:16px;flex-wrap:wrap;align-items:center;}
+  footer .k{color:var(--text);}
+  #stat{margin-left:auto;}
+</style>
+</head>
+<body>
+<header>
+  <h1>SIMULOG <span class="tag">LS-TTL · 3D</span></h1>
+  <div class="topbtns">
+    <button id="btnExport">Speichern</button>
+    <button id="btnImport">Laden</button>
+    <button id="btnClear">Alles löschen</button>
+  </div>
+</header>
+
+<div class="stage">
+  <aside class="palette" id="palette"></aside>
+  <div id="view">
+    <div id="overlay">Leeren Raum ziehen = <b>drehen</b> · Modul ziehen = <b>verschieben</b> · Buchse klicken = <b>verkabeln</b> · Rechtsklick = <b>löschen</b></div>
+    <div id="loaderr">3D-Bibliothek konnte nicht geladen werden.<br>Bitte mit aktiver Internetverbindung öffnen.</div>
+  </div>
+</div>
+
+<footer>
+  <span><span class="k" style="color:var(--high)">rot</span> = 1 / High</span>
+  <span><span class="k">grau</span> = 0 / Low</span>
+  <span>Output &amp; LED-Display: <span class="k">E an 0V</span> nötig</span>
+  <span>Mausrad = Zoom</span>
+  <span id="stat"></span>
+</footer>
+
+<input type="file" id="fileIn" accept="application/json" style="display:none">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+if(typeof THREE==='undefined'){
+  document.getElementById('loaderr').style.display='flex';
+  throw new Error('three.js not loaded');
+}
+
+//==========================================================================
+//  MODUL-SPEZIFIKATIONEN  (echte Simulog-Module aus dem PDF)
+//  Jedes Modul ist ein graues Panel mit mehreren Einheiten.
+//  Buchsen (sockets): {id, side, z, tx} -- tx = Ziel-x für die gedruckte Leiterbahn
+//==========================================================================
+const SX_G=50, SZ4=110;                 // Standard-Gatterpanel
+function cellZ(i,n,sz){                  // vertikale Mitte der i-ten Einheit
+  const top=12, bot=18, h=(sz-top-bot)/n;
+  return -sz/2 + top + h*(i+0.5);
+}
+function gatePanel(op,sym,neg,label){
+  const sockets=[], boxes=[];
+  for(let i=0;i<4;i++){
+    const zc=cellZ(i,4,SZ4);
+    sockets.push({id:'a'+i,side:'in', z:zc-6, tx:-11});
+    sockets.push({id:'b'+i,side:'in', z:zc+6, tx:-11});
+    sockets.push({id:'y'+i,side:'out',z:zc,   tx:11});
+    boxes.push({z:zc, sym, neg});
+  }
+  return {label, op, sx:SX_G, sz:SZ4, sockets, boxes,
+          leds:[{sid:'y0', z:cellZ(0,4,SZ4), x:SX_G/2-3}]};
+}
+function invPanel(){
+  const sockets=[], boxes=[];
+  for(let i=0;i<4;i++){
+    const zc=cellZ(i,4,SZ4);
+    sockets.push({id:'a'+i,side:'in', z:zc, tx:-11});
+    sockets.push({id:'y'+i,side:'out',z:zc, tx:11});
+    boxes.push({z:zc, sym:'1', neg:true});
+  }
+  return {label:'4 Inverter', op:'NOT', sx:SX_G, sz:SZ4, sockets, boxes,
+          leds:[{sid:'y0', z:cellZ(0,4,SZ4), x:SX_G/2-3}]};
+}
+
+const SPECS = {
+  IN4:{ label:'4-Bit Input', op:'IN', sx:52, sz:SZ4,
+        sockets:[0,1,2,3].map(i=>({id:'y'+i,side:'out',z:cellZ(i,4,SZ4),tx:14})),
+        knobs:[0,1,2,3].map(i=>({sid:'y'+i,z:cellZ(i,4,SZ4),x:-12})),
+        leds:[0,1,2,3].map(i=>({sid:'y'+i,z:cellZ(i,4,SZ4),x:2})) },
+
+  OUT4:{ label:'4-Bit Output', op:'OUT', sx:52, sz:SZ4, enable:'en',
+         sockets:[...[0,1,2,3].map(i=>({id:'d'+i,side:'in',z:cellZ(i,4,SZ4),tx:-14})),
+                  {id:'en',side:'in',z:SZ4/2-12,tx:-16,label:'E'}],
+         leds:[0,1,2,3].map(i=>({sid:'d'+i,z:cellZ(i,4,SZ4),x:6,lit:true})) },
+
+  AND4: gatePanel('AND','&',false,'4 UND'),
+  NAND4:gatePanel('NAND','&',true,'4 NAND'),
+  OR4:  gatePanel('OR','\u22651',false,'4 ODER'),
+  NOR4: gatePanel('NOR','\u22651',true,'4 NOR'),
+  INV4: invPanel(),
+
+  MUX4:{ label:'4 Multiplexer', op:'MUX', sx:56, sz:116, select:'sel',
+         sockets:(function(){
+           const s=[{id:'sel',side:'in',z:-116/2+8,tx:-14,label:'S'}];
+           for(let i=0;i<4;i++){const zc=cellZ(i,4,116)+6;
+             s.push({id:'a'+i,side:'in',z:zc-6,tx:-12,label:'A'});
+             s.push({id:'b'+i,side:'in',z:zc+6,tx:-12,label:'B'});
+             s.push({id:'y'+i,side:'out',z:zc,tx:12});}
+           return s;})(),
+         boxes:[0,1,2,3].map(i=>({z:cellZ(i,4,116)+6, sym:'MUX'})) },
+
+  FA:{   label:'Volladdierer', op:'FA', sx:54, sz:66,
+         sockets:[{id:'a',side:'in',z:-16,tx:-12,label:'A'},
+                  {id:'b',side:'in',z:0,tx:-12,label:'B'},
+                  {id:'cin',side:'in',z:16,tx:-12,label:'Ci'},
+                  {id:'s',side:'out',z:-9,tx:12,label:'S'},
+                  {id:'cout',side:'out',z:9,tx:12,label:'Co'}],
+         boxes:[{z:0,sym:'\u03A3'}],
+         leds:[{sid:'s',z:-9,x:54/2-3},{sid:'cout',z:9,x:54/2-3}] },
+
+  SEG:{  label:'LED-Display', op:'SEG', sx:52, sz:90, enable:'en', display:true,
+         sockets:[{id:'i0',side:'in',z:-30,tx:-14,label:'1'},
+                  {id:'i1',side:'in',z:-14,tx:-14,label:'2'},
+                  {id:'i2',side:'in',z:2,tx:-14,label:'4'},
+                  {id:'i3',side:'in',z:18,tx:-14,label:'8'},
+                  {id:'en',side:'in',z:34,tx:-16,label:'E'}] },
+
+  ZERO:{ label:'0V (Masse)', op:'ZERO', sx:30, sz:26,
+         sockets:[{id:'z',side:'out',z:0,tx:8}] },
+};
+
+const PALETTE_ORDER = [
+  ['Ein- / Ausgabe', ['IN4','OUT4','SEG','ZERO']],
+  ['Grundgatter',    ['AND4','NAND4','OR4','NOR4','INV4']],
+  ['Funktionsmodule',['MUX4','FA']],
+];
+const PAL_GLYPH = {IN4:'IN',OUT4:'OUT',SEG:'8',ZERO:'0V',AND4:'&',NAND4:'&\u0305',
+  OR4:'\u22651',NOR4:'\u22651\u0305',INV4:'1',MUX4:'M',FA:'\u03A3'};
+
+//==========================================================================
+//  SIMULATION
+//==========================================================================
+let mods = [];    // {id,type,x,z,grp,refs,out{},state{},lit{}}
+let wires = [];   // {id, from:{m,s}, to:{m,s}}
+let uid = 1, selected=null, arming=null;
+
+function val(m, sid){
+  const w = wires.find(w=> w.to.m===m.id && w.to.s===sid);
+  if(!w) return 1;                       // offener Eingang = High (LS-TTL)
+  const src = mods.find(x=>x.id===w.from.m);
+  return src ? (src.out[w.from.s]?1:0) : 1;
+}
+function gateOp(op,a,b){
+  switch(op){case 'AND':return a&&b?1:0; case 'NAND':return a&&b?0:1;
+    case 'OR':return a||b?1:0; case 'NOR':return a||b?0:1;}
+  return 0;
+}
+function compute(m){
+  const sp=SPECS[m.type];
+  switch(sp.op){
+    case 'IN':  for(let i=0;i<4;i++) m.out['y'+i]=m.state['y'+i]?1:0; break;
+    case 'ZERO':m.out.z=0; break;
+    case 'AND':case 'NAND':case 'OR':case 'NOR':
+      for(let i=0;i<4;i++) m.out['y'+i]=gateOp(sp.op,val(m,'a'+i),val(m,'b'+i)); break;
+    case 'NOT': for(let i=0;i<4;i++) m.out['y'+i]=val(m,'a'+i)?0:1; break;
+    case 'MUX':{ const s=val(m,'sel');
+      for(let i=0;i<4;i++) m.out['y'+i]= s?val(m,'b'+i):val(m,'a'+i); break; }
+    case 'FA':{ const t=val(m,'a')+val(m,'b')+val(m,'cin');
+      m.out.s=t&1; m.out.cout=t>1?1:0; break; }
+    case 'OUT':{ const en=val(m,'en')===0;
+      for(let i=0;i<4;i++) m.lit['d'+i]= en && val(m,'d'+i)===1; break; }
+    case 'SEG':{ const en=val(m,'en')===0;
+      m.val = en ? (val(m,'i0')+2*val(m,'i1')+4*val(m,'i2')+8*val(m,'i3')) : -1; break; }
+  }
+}
+function evaluate(){
+  for(let it=0; it<80; it++){
+    let ch=false;
+    for(const m of mods){ const b=JSON.stringify(m.out); compute(m);
+      if(JSON.stringify(m.out)!==b) ch=true; }
+    if(!ch) break;
+  }
+  mods.forEach(compute);
+  updateVisuals();
+}
+
+//==========================================================================
+//  THREE.JS GRUNDGERÜST
+//==========================================================================
+const view=document.getElementById('view');
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x10131a);
+const camera=new THREE.PerspectiveCamera(45,1,1,5000);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2)); view.appendChild(renderer.domElement);
+scene.add(new THREE.AmbientLight(0xffffff,0.68));
+const dl=new THREE.DirectionalLight(0xffffff,0.85); dl.position.set(160,320,180); scene.add(dl);
+const dl2=new THREE.DirectionalLight(0x88aaff,0.22); dl2.position.set(-200,140,-160); scene.add(dl2);
+
+// größeres Tablett
+const BOARD_W=560, BOARD_D=380, BOARD_H=10, TOP=BOARD_H/2;
+scene.add(new THREE.Mesh(new THREE.BoxGeometry(BOARD_W,BOARD_H,BOARD_D),
+  new THREE.MeshStandardMaterial({color:0x2b2f37,roughness:.95,metalness:.05})));
+(function grid(){
+  const cv=document.createElement('canvas'); cv.width=cv.height=1024;
+  const x=cv.getContext('2d'); x.fillStyle='#262a32'; x.fillRect(0,0,1024,1024);
+  x.fillStyle='rgba(255,255,255,.10)';
+  for(let i=16;i<1024;i+=32)for(let j=16;j<1024;j+=32){x.beginPath();x.arc(i,j,2,0,7);x.fill();}
+  const t=new THREE.CanvasTexture(cv); t.repeat.set(2,1.4);
+  const top=new THREE.Mesh(new THREE.PlaneGeometry(BOARD_W,BOARD_D),
+    new THREE.MeshStandardMaterial({map:t,roughness:1}));
+  top.rotation.x=-Math.PI/2; top.position.y=TOP+0.1; scene.add(top);
+})();
+
+const cam={tx:0,ty:0,tz:0,dist:380,az:0.6,el:0.82};
+function updateCamera(){
+  cam.el=Math.max(0.18,Math.min(1.45,cam.el)); cam.dist=Math.max(140,Math.min(1100,cam.dist));
+  const ce=Math.cos(cam.el),se=Math.sin(cam.el);
+  camera.position.set(cam.tx+cam.dist*ce*Math.sin(cam.az),cam.ty+cam.dist*se,cam.tz+cam.dist*ce*Math.cos(cam.az));
+  camera.lookAt(cam.tx,cam.ty,cam.tz);
+}
+function resize(){const w=view.clientWidth,h=view.clientHeight;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();}
+new ResizeObserver(resize).observe(view); resize(); updateCamera();
+
+//==========================================================================
+//  PANEL-OBERFLÄCHE als gedruckte Textur (Symbole, Leiterbahnen, Label)
+//==========================================================================
+const S=5; // px pro Welteinheit
+function panelFace(sp){
+  const W=Math.round(sp.sx*S), H=Math.round(sp.sz*S);
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const c=cv.getContext('2d');
+  const mx=x=>(x+sp.sx/2)*S, mz=z=>(z+sp.sz/2)*S;
+  // Grundfläche
+  c.fillStyle='#cfcfc8'; c.fillRect(0,0,W,H);
+  c.fillStyle='rgba(0,0,0,.05)'; c.fillRect(0,0,W,6); // leichte Kante
+  // Leiterbahnen (von jeder Buchse zu ihrem Ziel)
+  c.strokeStyle='#3a3a37'; c.lineWidth=2.2;
+  (sp.sockets||[]).forEach(s=>{
+    const sx=mx(s.side==='in'?-sp.sx/2:sp.sx/2), sz=mz(s.z);
+    const tx=mx(s.tx!=null?s.tx:0);
+    c.beginPath(); c.moveTo(sx,sz); c.lineTo(tx,sz); c.stroke();
+  });
+  // Symbolkästen
+  (sp.boxes||[]).forEach(b=>{
+    const bw=(sp.op==='MUX'?24:22), bh=16;          // Weltbreite/-höhe
+    const x0=mx(-bw/2), x1=mx(bw/2), z0=mz(b.z-bh/2), z1=mz(b.z+bh/2);
+    c.fillStyle='#f5f5f0'; c.strokeStyle='#111'; c.lineWidth=3;
+    c.fillRect(x0,z0,x1-x0,z1-z0); c.strokeRect(x0,z0,x1-x0,z1-z0);
+    c.fillStyle='#16171b'; c.textAlign='center'; c.textBaseline='middle';
+    c.font='bold '+(b.sym.length>2?Math.round(bh*S*0.34):Math.round(bh*S*0.58))+'px monospace';
+    c.fillText(b.sym,(x0+x1)/2,(z0+z1)/2+1);
+    if(b.neg){ const ox=x1+5*S/2.5;
+      c.beginPath(); c.arc(ox,(z0+z1)/2,5,0,7); c.fillStyle='#f5f5f0'; c.fill();
+      c.lineWidth=2.5; c.strokeStyle='#111'; c.stroke(); }
+  });
+  // Pin-Labels
+  (sp.sockets||[]).forEach(s=>{ if(!s.label) return;
+    c.fillStyle='#222'; c.font='bold 13px monospace';
+    c.textAlign=s.side==='in'?'left':'right'; c.textBaseline='middle';
+    c.fillText(s.label, mx(s.side==='in'?-sp.sx/2:sp.sx/2)+(s.side==='in'?8:-8), mz(s.z)-9);
+  });
+  // Beschriftung unten:  LS-TTL   <name>
+  c.fillStyle='#16171b'; c.textBaseline='alphabetic';
+  c.textAlign='left';  c.font='bold 11px monospace'; c.fillText('LS-TTL', 7, H-7);
+  c.textAlign='right'; c.font='bold 12px monospace'; c.fillText(sp.label.toUpperCase(), W-7, H-7);
+  const t=new THREE.CanvasTexture(cv); t.anisotropy=8; return t;
+}
+
+//----- 7-Segment-Textur -----
+const SEG_MAP={0:'1111110',1:'0110000',2:'1101101',3:'1111001',4:'0110011',5:'1011011',
+  6:'1011111',7:'1110000',8:'1111111',9:'1111011',10:'1110111',11:'0011111',12:'1001110',
+  13:'0111101',14:'1001111',15:'1000111'};
+function drawSeg(ctx,val){
+  ctx.fillStyle='#120a09'; ctx.fillRect(0,0,128,200);
+  const segP=[
+    [[34,18],[94,18],[84,30],[44,30]],
+    [[96,20],[108,32],[108,86],[96,98],[88,86],[88,32]],
+    [[96,102],[108,114],[108,168],[96,180],[88,168],[88,114]],
+    [[44,170],[84,170],[94,182],[34,182]],
+    [[32,102],[40,114],[40,168],[32,180],[20,168],[20,114]],
+    [[32,20],[40,32],[40,86],[32,98],[20,86],[20,32]],
+    [[44,92],[84,92],[94,100],[84,108],[44,108],[34,100]],
+  ];
+  const m = val<0 ? '0000000' : (SEG_MAP[val]||'0000000');
+  for(let i=0;i<7;i++){ const p=segP[i];
+    ctx.beginPath(); ctx.moveTo(p[0][0],p[0][1]);
+    for(let k=1;k<p.length;k++)ctx.lineTo(p[k][0],p[k][1]); ctx.closePath();
+    ctx.fillStyle = m[i]==='1' ? '#ff3b30' : '#2c1411'; ctx.fill(); }
+}
+function seg7Tex(){const cv=document.createElement('canvas');cv.width=128;cv.height=200;
+  const t=new THREE.CanvasTexture(cv);t._cv=cv;t.anisotropy=8;drawSeg(cv.getContext('2d'),-1);
+  t.needsUpdate=true;return t;}
+
+//==========================================================================
+//  MATERIALIEN  /  KONSTANTEN
+//==========================================================================
+const MOD_H=14, SOCK_R=2.4, SOCK_H=3.2, PLUG_R=2.3, PLUG_H=7, PLUG_STEP=8.2;
+const SOCKET=new THREE.MeshStandardMaterial({color:0x1b1d22,roughness:.85});
+const PLUG_HI=()=>new THREE.MeshStandardMaterial({color:0xe23b2e,emissive:0x551510,roughness:.45,metalness:.3});
+const PLUG_LO=()=>new THREE.MeshStandardMaterial({color:0x4a525f,emissive:0x0a0d12,roughness:.55,metalness:.3});
+
+let pickables=[], pickablesWire=[];
+
+//==========================================================================
+//  MODUL BAUEN
+//==========================================================================
+function makeModule(m){
+  const sp=SPECS[m.type];
+  const g=new THREE.Group(); g.position.set(m.x,TOP,m.z);
+  const refs={pins:{},leds:{},knobs:{}};
+
+  const body=new THREE.Mesh(new THREE.BoxGeometry(sp.sx,MOD_H,sp.sz),
+    new THREE.MeshStandardMaterial({color:0xcfcfc8,roughness:.72,metalness:.08}));
+  body.position.y=MOD_H/2; body.userData={pick:'body',id:m.id}; g.add(body); refs.body=body;
+
+  // gedruckte Oberfläche
+  const face=new THREE.Mesh(new THREE.PlaneGeometry(sp.sx,sp.sz),
+    new THREE.MeshStandardMaterial({map:panelFace(sp),roughness:.6}));
+  face.rotation.x=-Math.PI/2; face.position.y=MOD_H+0.15; g.add(face);
+
+  // 7-Segment-Anzeige
+  if(sp.display){
+    const t=seg7Tex(); refs.segTex=t;
+    const scr=new THREE.Mesh(new THREE.PlaneGeometry(sp.sx*0.5,sp.sz*0.6),
+      new THREE.MeshStandardMaterial({map:t,emissive:0x140606,emissiveIntensity:.5,roughness:.4}));
+    scr.rotation.x=-Math.PI/2; scr.position.set(6,MOD_H+0.2,0); g.add(scr);
+  }
+
+  // Buchsen
+  (sp.sockets||[]).forEach(s=>{
+    const x=(s.side==='in'?-sp.sx/2:sp.sx/2);
+    const sock=new THREE.Mesh(new THREE.CylinderGeometry(SOCK_R,SOCK_R,SOCK_H,16),SOCKET);
+    sock.position.set(x,MOD_H+SOCK_H/2,s.z);
+    sock.userData={pick:'pin',id:m.id,side:s.side,s:s.id}; g.add(sock);
+    refs.pins[s.side+':'+s.id]={mesh:sock,local:new THREE.Vector3(x,MOD_H+SOCK_H,s.z)};
+    pickables.push(sock);
+  });
+
+  // Schalter-Knöpfe (IN4)
+  (sp.knobs||[]).forEach(k=>{
+    const knob=new THREE.Mesh(new THREE.CylinderGeometry(4.4,4.4,4,18),
+      new THREE.MeshStandardMaterial({color:0x555a63,roughness:.5,metalness:.3}));
+    knob.position.set(k.x,MOD_H+2,k.z); knob.userData={pick:'switch',id:m.id,s:k.sid};
+    g.add(knob); refs.knobs[k.sid]=knob; pickables.push(knob);
+  });
+
+  // LEDs
+  (sp.leds||[]).forEach(L=>{
+    const led=new THREE.Mesh(new THREE.SphereGeometry(3.4,18,14),
+      new THREE.MeshStandardMaterial({color:0x4a1714,emissive:0x4a1714,emissiveIntensity:.5,roughness:.3}));
+    led.position.set(L.x,MOD_H+2,L.z); g.add(led); refs.leds[L.sid]=led;
+  });
+
+  scene.add(g); m.grp=g; m.refs=refs;
+  pickables.push(body);
+}
+function worldPin(m,side,sid){return m.grp.position.clone().add(m.refs.pins[side+':'+sid].local);}
+
+//==========================================================================
+//  KABEL  +  GESTAPELTE STECKER
+//==========================================================================
+const wireGroup=new THREE.Group(); scene.add(wireGroup);
+function stackIndex(wire,end){
+  const t=end==='from'?wire.from:wire.to, here=[];
+  wires.forEach(w=>{
+    if(end==='from' && w.from.m===t.m && w.from.s===t.s) here.push(w);
+    if(end==='to'   && w.to.m===t.m   && w.to.s===t.s)   here.push(w);
+  });
+  here.sort((a,b)=>a.id-b.id); return Math.max(0,here.indexOf(wire));
+}
+function rebuildWires(){
+  while(wireGroup.children.length){const o=wireGroup.children.pop();
+    o.geometry&&o.geometry.dispose(); o.material&&o.material.dispose();}
+  pickablesWire.length=0;
+  wires.forEach(w=>{
+    const src=mods.find(m=>m.id===w.from.m), dst=mods.find(m=>m.id===w.to.m);
+    if(!src||!dst) return;
+    if(!src.refs.pins['out:'+w.from.s] || !dst.refs.pins['in:'+w.to.s]) return;
+    const hi=src.out[w.from.s]===1;
+    const si=stackIndex(w,'from'), di=stackIndex(w,'to');
+    const pa=worldPin(src,'out',w.from.s), pb=worldPin(dst,'in',w.to.s);
+    const a=pa.clone(); a.y+=PLUG_H+si*PLUG_STEP;
+    const b=pb.clone(); b.y+=PLUG_H+di*PLUG_STEP;
+    const mkPlug=(base,idx)=>{
+      const plug=new THREE.Mesh(new THREE.CylinderGeometry(PLUG_R,PLUG_R*0.85,PLUG_H,14),hi?PLUG_HI():PLUG_LO());
+      plug.position.set(base.x,base.y+PLUG_H/2+idx*PLUG_STEP,base.z); wireGroup.add(plug);
+      const col=new THREE.Mesh(new THREE.CylinderGeometry(PLUG_R*1.25,PLUG_R*1.25,1.4,14),
+        new THREE.MeshStandardMaterial({color:0x16181d,roughness:.85}));
+      col.position.set(base.x,base.y+idx*PLUG_STEP+0.7,base.z); wireGroup.add(col);
+    };
+    mkPlug(pa,si); mkPlug(pb,di);
+    const lift=20+Math.max(si,di)*PLUG_STEP+a.distanceTo(b)*0.12;
+    const mid=a.clone().add(b).multiplyScalar(0.5); mid.y+=lift;
+    const tube=new THREE.Mesh(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(a,mid,b),26,1.2,8),
+      hi?PLUG_HI():PLUG_LO());
+    tube.userData={pick:'wire',id:w.id}; wireGroup.add(tube); pickablesWire.push(tube);
+  });
+}
+
+//==========================================================================
+//  PICKING / INTERAKTION
+//==========================================================================
+const ray=new THREE.Raycaster(), ndc=new THREE.Vector2();
+function pick(ev,set){
+  const r=renderer.domElement.getBoundingClientRect();
+  ndc.x=((ev.clientX-r.left)/r.width)*2-1; ndc.y=-((ev.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(ndc,camera); const h=ray.intersectObjects(set,false); return h.length?h[0].object:null;
+}
+const dragPlane=new THREE.Plane(new THREE.Vector3(0,1,0),-(TOP+MOD_H)), hitV=new THREE.Vector3();
+function planePoint(ev){
+  const r=renderer.domElement.getBoundingClientRect();
+  ndc.x=((ev.clientX-r.left)/r.width)*2-1; ndc.y=-((ev.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(ndc,camera); return ray.ray.intersectPlane(dragPlane,hitV)?hitV.clone():null;
+}
+let mode=null,dragMod=null,dragOff=null,downXY=null,moved=false,tapHit=null;
+const canvas=renderer.domElement;
+canvas.addEventListener('mousedown',e=>{
+  if(e.button!==0)return; downXY={x:e.clientX,y:e.clientY}; moved=false;
+  const h=pick(e,pickables);
+  if(h&&(h.userData.pick==='pin'||h.userData.pick==='switch')){mode='tap';tapHit=h;}
+  else if(h&&h.userData.pick==='body'){mode='module';dragMod=mods.find(m=>m.id===h.userData.id);
+    const p=planePoint(e); dragOff=p?{x:p.x-dragMod.x,z:p.z-dragMod.z}:{x:0,z:0};}
+  else mode='orbit';
+});
+canvas.addEventListener('mousemove',e=>{
+  if(!mode){const h=pick(e,pickables);
+    canvas.style.cursor=h?((h.userData.pick==='pin')?'crosshair':'grab'):'default'; return;}
+  if(downXY&&(Math.abs(e.clientX-downXY.x)>3||Math.abs(e.clientY-downXY.y)>3))moved=true;
+  if(mode==='orbit'){cam.az-=e.movementX*0.006;cam.el+=e.movementY*0.006;updateCamera();}
+  else if(mode==='module'&&dragMod){const p=planePoint(e);
+    if(p){dragMod.x=p.x-dragOff.x;dragMod.z=p.z-dragOff.z;
+      dragMod.grp.position.set(dragMod.x,TOP,dragMod.z);wireDirty=true;}}
+});
+canvas.addEventListener('mouseup',e=>{
+  if(mode==='tap'&&!moved){
+    const h=pick(e,pickables);
+    if(h&&h.userData.pick==='pin')onPin(h.userData);
+    else if(h&&h.userData.pick==='switch'){const m=mods.find(x=>x.id===h.userData.id);
+      m.state[h.userData.s]=!m.state[h.userData.s]; evaluate();}
+  } else if(mode==='module'&&!moved&&dragMod){ select(dragMod);
+  } else if(mode==='orbit'&&!moved){
+    const w=pick(e,pickablesWire);
+    if(w&&w.userData.pick==='wire'){wires=wires.filter(x=>x.id!==w.userData.id);wireDirty=true;evaluate();}
+    else {select(null);arming=null;refreshArm();}
+  }
+  mode=null;dragMod=null;
+});
+canvas.addEventListener('wheel',e=>{e.preventDefault();cam.dist*=(1+Math.sign(e.deltaY)*0.08);updateCamera();},{passive:false});
+canvas.addEventListener('contextmenu',e=>{e.preventDefault();
+  const h=pick(e,pickables);
+  if(h&&(h.userData.pick==='body'||h.userData.pick==='pin'||h.userData.pick==='switch'))deleteMod(h.userData.id);});
+window.addEventListener('keydown',e=>{if((e.key==='Delete'||e.key==='Backspace')&&selected)deleteMod(selected.id);});
+
+function onPin(u){
+  if(u.side==='out'){arming={m:u.id,s:u.s};refreshArm();}
+  else{ if(!arming||arming.m===u.id)return;
+    wires=wires.filter(w=>!(w.to.m===u.id&&w.to.s===u.s));
+    wires.push({id:uid++,from:{...arming},to:{m:u.id,s:u.s}});
+    arming=null;refreshArm();wireDirty=true;evaluate();}
+}
+function refreshArm(){
+  mods.forEach(m=>Object.entries(m.refs.pins).forEach(([k,p])=>{
+    const on=arming&&m.id===arming.m&&k==='out:'+arming.s;
+    p.mesh.material=on?new THREE.MeshStandardMaterial({color:0xf5c518,emissive:0x554800}):SOCKET;
+  }));
+}
+function select(m){
+  if(selected)selected.refs.body.material.emissive.setHex(0x000000);
+  selected=m; if(m)m.refs.body.material.emissive.setHex(0x332a00);
+}
+function deleteMod(id){
+  const m=mods.find(x=>x.id===id); if(!m)return;
+  scene.remove(m.grp); m.grp.traverse(o=>{o.geometry&&o.geometry.dispose();});
+  pickables=pickables.filter(o=>o.userData.id!==id);
+  mods=mods.filter(x=>x.id!==id);
+  wires=wires.filter(w=>w.from.m!==id&&w.to.m!==id);
+  if(selected&&selected.id===id)selected=null;
+  wireDirty=true; evaluate();
+}
+
+//==========================================================================
+//  VISUELLE AKTUALISIERUNG
+//==========================================================================
+function updateVisuals(){
+  mods.forEach(m=>{
+    const sp=SPECS[m.type], r=m.refs;
+    // LEDs
+    Object.entries(r.leds).forEach(([sid,led])=>{
+      let on=false;
+      if(sp.op==='OUT') on=m.lit['d'+sid.slice(1)]||m.lit[sid];
+      else on = m.out[sid]===1;
+      if(sp.op==='OUT') on=!!m.lit[sid];
+      led.material.color.setHex(on?0xff4338:0x4a1714);
+      led.material.emissive.setHex(on?0xff2a20:0x4a1714);
+      led.material.emissiveIntensity=on?1.1:.5;
+    });
+    // Schalter-Knöpfe
+    Object.entries(r.knobs).forEach(([sid,knob])=>{
+      const on=!!m.state[sid];
+      knob.material.color.setHex(on?0xe23b2e:0x555a63);
+      knob.rotation.z=on?-0.3:0.3;
+    });
+    // 7-Segment
+    if(r.segTex){drawSeg(r.segTex._cv.getContext('2d'),m.val==null?-1:m.val);r.segTex.needsUpdate=true;}
+  });
+  wireDirty=true;
+  document.getElementById('stat').textContent=`${mods.length} Module · ${wires.length} Leitungen`;
+}
+
+//==========================================================================
+//  HINZUFÜGEN + PALETTE
+//==========================================================================
+function addMod(type,x,z){
+  const m={id:uid++,type,x:x??(-60+Math.random()*40),z:z??(-40+Math.random()*40),
+           out:{},state:{},lit:{},val:-1};
+  mods.push(m); makeModule(m); evaluate(); return m;
+}
+const pal=document.getElementById('palette');
+PALETTE_ORDER.forEach(([group,types])=>{
+  const g=document.createElement('div');g.className='pal-group';g.textContent=group;pal.appendChild(g);
+  types.forEach(t=>{const it=document.createElement('div');it.className='pal-item';
+    it.innerHTML=`<div class="pal-glyph">${PAL_GLYPH[t]||''}</div>
+      <div class="pal-label">${SPECS[t].label}</div>`;
+    it.onclick=()=>addMod(t); pal.appendChild(it);});
+});
+
+//==========================================================================
+//  SPEICHERN / LADEN / LÖSCHEN
+//==========================================================================
+document.getElementById('btnClear').onclick=()=>{
+  if(mods.length&&!confirm('Wirklich alles löschen?'))return;
+  [...mods].forEach(m=>deleteMod(m.id));evaluate();};
+document.getElementById('btnExport').onclick=()=>{
+  const data={uid,mods:mods.map(m=>({id:m.id,type:m.type,x:m.x,z:m.z,state:m.state})),
+    wires:wires.map(w=>({id:w.id,from:w.from,to:w.to}))};
+  const b=new Blob([JSON.stringify(data,null,1)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='simulog-schaltung.json';a.click();};
+const fileIn=document.getElementById('fileIn');
+document.getElementById('btnImport').onclick=()=>fileIn.click();
+fileIn.onchange=e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();
+  rd.onload=()=>{try{const d=JSON.parse(rd.result);
+    [...mods].forEach(m=>deleteMod(m.id)); uid=d.uid||1;
+    (d.mods||[]).forEach(s=>{const m={...s,state:s.state||{},out:{},lit:{},val:-1};mods.push(m);makeModule(m);});
+    wires=(d.wires||[]).map(w=>({...w})); evaluate();
+  }catch(err){alert('Datei konnte nicht gelesen werden.');}};
+  rd.readAsText(f); fileIn.value='';};
+
+//==========================================================================
+//  RENDER-LOOP
+//==========================================================================
+let wireDirty=false;
+function loop(){ if(wireDirty){rebuildWires();wireDirty=false;} renderer.render(scene,camera); requestAnimationFrame(loop); }
+loop();
+
+//==========================================================================
+//  STARTBEISPIEL:  Input → UND → Output (Enable an 0V)
+//==========================================================================
+(function demo(){
+  const inp=addMod('IN4',-200,-20);
+  const and=addMod('AND4',-70,-20);
+  const out=addMod('OUT4',80,-20);
+  const zero=addMod('ZERO',80,120);
+  inp.state.y0=true; inp.state.y1=true;
+  const wire=(fm,fs,tm,ts)=>wires.push({id:uid++,from:{m:fm,s:fs},to:{m:tm,s:ts}});
+  wire(inp.id,'y0',and.id,'a0'); wire(inp.id,'y1',and.id,'b0');
+  wire(and.id,'y0',out.id,'d0'); wire(zero.id,'z',out.id,'en');
+  evaluate();
+})();
+</script>
+</body>
+</html>
