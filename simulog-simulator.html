@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulog LS-TTL Simulator</title>
+<style>
+  :root{
+    --bg:#14171c; --panel:#1d2127; --panel2:#262b33; --line:#323843;
+    --module:#cfcfc8; --module-edge:#15161a; --symbol:#f3f3ee; --ink:#16171b;
+    --text:#e6e8ec; --muted:#8b93a0;
+    --high:#e23b2e; --low:#3a414e;
+    --led-on:#ff4338; --led-off:#4a1714;
+    --accent:#f5c518; --seg-on:#ff3b30; --seg-off:#2c1411;
+    --font-ui:system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--font-ui); color:var(--text); background:var(--bg);
+    display:flex; flex-direction:column; height:100vh; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  header{
+    display:flex; align-items:center; gap:14px; padding:10px 16px;
+    background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto;
+  }
+  header h1{
+    font-size:15px; font-weight:650; letter-spacing:.3px;
+    display:flex; align-items:baseline; gap:8px;
+  }
+  header h1 .tag{font-family:var(--font-mono); font-size:11px; color:var(--high); font-weight:600;}
+  header .hint{font-size:12px; color:var(--muted); margin-left:auto; font-family:var(--font-mono);}
+  .topbtns{display:flex; gap:8px;}
+  .topbtns button{
+    font:inherit; font-size:12px; color:var(--text); background:var(--panel2);
+    border:1px solid var(--line); border-radius:6px; padding:6px 11px; cursor:pointer;
+  }
+  .topbtns button:hover{border-color:var(--high); color:#fff;}
+  .topbtns button.danger:hover{border-color:var(--high); background:#2a1a1a;}
+
+  .stage{display:flex; flex:1 1 auto; min-height:0;}
+
+  /* Palette */
+  .palette{
+    flex:0 0 168px; background:var(--panel); border-right:1px solid var(--line);
+    overflow-y:auto; padding:12px 10px; display:flex; flex-direction:column; gap:6px;
+  }
+  .pal-group{font-size:10px; text-transform:uppercase; letter-spacing:1px;
+    color:var(--muted); margin:10px 4px 3px; font-weight:700;}
+  .pal-group:first-child{margin-top:0;}
+  .pal-item{
+    display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:7px;
+    border:1px solid var(--line); background:var(--panel2); cursor:pointer; user-select:none;
+  }
+  .pal-item:hover{border-color:var(--high); transform:translateX(2px);}
+  .pal-item:active{transform:scale(.97);}
+  .pal-glyph{
+    width:30px; height:24px; flex:0 0 auto; border-radius:3px; background:var(--symbol);
+    color:var(--ink); display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-size:12px; font-weight:700; border:1.5px solid #111;
+  }
+  .pal-glyph.round{border-radius:50%; background:var(--led-off); border-color:#3a0f0c;}
+  .pal-label{font-size:12.5px; line-height:1.15;}
+  .pal-label small{display:block; color:var(--muted); font-size:10px;}
+
+  /* Board */
+  .board-wrap{flex:1 1 auto; position:relative; overflow:hidden; min-width:0;}
+  #board{
+    position:absolute; inset:0;
+    background-color:#0f1216;
+    background-image:radial-gradient(circle, rgba(255,255,255,.07) 1.1px, transparent 1.1px);
+    background-size:22px 22px; background-position:11px 11px;
+  }
+  #wires{position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible;}
+  #wires path.hit{stroke:transparent; stroke-width:14; pointer-events:stroke; cursor:pointer;}
+
+  .comp{
+    position:absolute; user-select:none;
+    filter:drop-shadow(0 2px 4px rgba(0,0,0,.4));
+  }
+  .comp .body{
+    position:relative; background:var(--module); border:1.5px solid var(--module-edge);
+    border-radius:5px; cursor:grab;
+    background-image:linear-gradient(180deg, rgba(255,255,255,.35), rgba(0,0,0,.06));
+  }
+  .comp.dragging .body{cursor:grabbing;}
+  .comp .sym{
+    position:absolute; background:var(--symbol); border:1.6px solid #111; border-radius:2px;
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-mono); font-weight:700; color:var(--ink); line-height:1;
+  }
+  .comp .negbubble{
+    position:absolute; width:9px; height:9px; border:1.6px solid #111; border-radius:50%;
+    background:var(--symbol);
+  }
+  .pin{
+    position:absolute; width:13px; height:13px; border-radius:50%;
+    background:#3a3d44; border:2px solid #16171b; transform:translate(-50%,-50%);
+    cursor:crosshair; z-index:3;
+  }
+  .pin:hover{background:var(--accent); border-color:#7a5e00;}
+  .pin.armed{background:var(--accent); box-shadow:0 0 0 4px rgba(245,197,24,.25);}
+  .pin.hot{background:var(--high);}
+  .pinlbl{
+    position:absolute; font-family:var(--font-mono); font-size:9px; color:#222;
+    transform:translateY(-50%); pointer-events:none; font-weight:700;
+  }
+  .comp .led{
+    position:absolute; width:13px; height:13px; border-radius:50%;
+    background:var(--led-off); border:1.5px solid #2a0c0a; box-shadow:inset 0 1px 1px rgba(0,0,0,.4);
+  }
+  .comp .led.on{background:var(--led-on); box-shadow:0 0 9px 1px rgba(255,67,56,.85), inset 0 0 3px rgba(255,255,255,.6);}
+  .comp .delx{
+    position:absolute; top:-9px; right:-9px; width:18px; height:18px; border-radius:50%;
+    background:#2a2e36; border:1px solid var(--line); color:var(--muted); cursor:pointer;
+    display:none; align-items:center; justify-content:center; font-size:12px; line-height:1; z-index:5;
+  }
+  .comp:hover .delx{display:flex;}
+  .comp .delx:hover{background:var(--high); color:#fff; border-color:var(--high);}
+
+  /* switch knob */
+  .swknob{
+    position:absolute; width:26px; height:15px; border-radius:8px; background:#555;
+    border:1px solid #222; cursor:pointer; transition:background .12s;
+  }
+  .swknob::after{content:""; position:absolute; top:1px; left:1px; width:11px; height:11px;
+    border-radius:50%; background:#ddd; transition:left .12s;}
+  .swknob.on{background:var(--high);}
+  .swknob.on::after{left:12px;}
+
+  /* 7-seg */
+  .seg7{position:absolute; background:#120a09; border-radius:3px; border:1px solid #000;}
+
+  footer{
+    flex:0 0 auto; padding:6px 16px; background:var(--panel); border-top:1px solid var(--line);
+    font-size:11.5px; color:var(--muted); font-family:var(--font-mono);
+    display:flex; gap:18px; flex-wrap:wrap; align-items:center;
+  }
+  footer .k{color:var(--text);}
+  footer .swatch{display:inline-block;width:20px;height:3px;border-radius:2px;vertical-align:middle;margin-right:4px;}
+  @media (max-width:640px){
+    .palette{flex-basis:128px;} header .hint{display:none;}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SIMULOG <span class="tag">LS-TTL</span></h1>
+  <div class="topbtns">
+    <button id="btnExport">Speichern</button>
+    <button id="btnImport">Laden</button>
+    <button id="btnClear" class="danger">Alles löschen</button>
+  </div>
+  <span class="hint">Pin klicken → verdrahten · Bauteil ziehen → verschieben</span>
+</header>
+
+<div class="stage">
+  <aside class="palette" id="palette"></aside>
+  <div class="board-wrap">
+    <div id="board">
+      <svg id="wires"></svg>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span><span class="swatch" style="background:var(--high)"></span><span class="k">rot</span> = 1 / High</span>
+  <span><span class="swatch" style="background:var(--low)"></span><span class="k">grau</span> = 0 / Low</span>
+  <span>Offener Eingang = <span class="k">1 (High)</span>, wie bei echtem LS-TTL</span>
+  <span id="stat" style="margin-left:auto;"></span>
+</footer>
+
+<input type="file" id="fileIn" accept="application/json" style="display:none">
+
+<script>
+//============================================================
+//  Bauteil-Definitionen  (Pin-Geometrie relativ zum Modul)
+//============================================================
+const W = 86;          // Standard-Modulbreite Gatter
+const DEFS = {
+  SWITCH:{ w:74,h:46, ins:[], outs:[{id:'y',y:23}], kind:'switch',
+           name:'Schalter', glyph:'I', desc:'1-Bit Eingang' },
+  LED:{    w:70,h:46, ins:[{id:'a',y:23}], outs:[], kind:'led',
+           name:'LED', glyph:'●', round:true, desc:'1-Bit Ausgang' },
+  AND:{    w:W,h:58, ins:[{id:'a',y:18},{id:'b',y:40}], outs:[{id:'y',y:29}],
+           sym:'&', name:'UND', glyph:'&', desc:'2× Eingang' },
+  NAND:{   w:W,h:58, ins:[{id:'a',y:18},{id:'b',y:40}], outs:[{id:'y',y:29}],
+           sym:'&', neg:true, name:'NAND', glyph:'&\u0305', desc:'UND, negiert' },
+  OR:{     w:W,h:58, ins:[{id:'a',y:18},{id:'b',y:40}], outs:[{id:'y',y:29}],
+           sym:'\u22651', name:'ODER', glyph:'\u22651', desc:'2× Eingang' },
+  NOR:{    w:W,h:58, ins:[{id:'a',y:18},{id:'b',y:40}], outs:[{id:'y',y:29}],
+           sym:'\u22651', neg:true, name:'NOR', glyph:'\u22651', desc:'ODER, negiert' },
+  NOT:{    w:W,h:44, ins:[{id:'a',y:22}], outs:[{id:'y',y:22}],
+           sym:'1', neg:true, name:'Inverter', glyph:'1', desc:'Negation' },
+  MUX:{    w:96,h:78, ins:[{id:'d0',y:18,l:'0'},{id:'d1',y:40,l:'1'},{id:'s',y:62,l:'S'}],
+           outs:[{id:'y',y:30}], sym:'MUX', name:'2:1 MUX', glyph:'M', desc:'Multiplexer' },
+  FA:{     w:100,h:78, ins:[{id:'a',y:18,l:'A'},{id:'b',y:40,l:'B'},{id:'cin',y:62,l:'Ci'}],
+           outs:[{id:'s',y:24,l:'S'},{id:'cout',y:54,l:'Co'}], sym:'\u03A3',
+           name:'Volladdierer', glyph:'\u03A3', desc:'A+B+Cin' },
+  SEG7:{   w:96,h:124, ins:[{id:'b0',y:24,l:'1'},{id:'b1',y:50,l:'2'},{id:'b2',y:76,l:'4'},{id:'b3',y:102,l:'8'}],
+           outs:[], kind:'seg7', name:'7-Segment', glyph:'8', desc:'Hex-Anzeige 0–F' },
+};
+const PALETTE_ORDER = [
+  ['Ein- / Ausgabe', ['SWITCH','LED','SEG7']],
+  ['Grundgatter',    ['AND','NAND','OR','NOR','NOT']],
+  ['Funktionsmodule',['MUX','FA']],
+];
+
+//============================================================
+//  Zustand
+//============================================================
+let comps = [];      // {id,type,x,y,state(switch),out{},lit,val}
+let wires = [];      // {id, from:{c,pin}, to:{c,pin}}
+let uid = 1;
+let arming = null;   // {c,pin} eines Ausgangs, der auf Verbindung wartet
+
+const board = document.getElementById('board');
+const svg   = document.getElementById('wires');
+
+//============================================================
+//  Palette aufbauen
+//============================================================
+const pal = document.getElementById('palette');
+PALETTE_ORDER.forEach(([group, types])=>{
+  const g = document.createElement('div'); g.className='pal-group'; g.textContent=group;
+  pal.appendChild(g);
+  types.forEach(t=>{
+    const d = DEFS[t];
+    const item = document.createElement('div'); item.className='pal-item';
+    item.innerHTML = `<div class="pal-glyph${d.round?' round':''}">${d.glyph}</div>
+      <div class="pal-label">${d.name}<small>${d.desc}</small></div>`;
+    item.onclick = ()=> addComp(t);
+    pal.appendChild(item);
+  });
+});
+
+//============================================================
+//  Komponenten erzeugen
+//============================================================
+function addComp(type, x, y){
+  const d = DEFS[type];
+  const c = { id:uid++, type, x:x??(60+Math.random()*40), y:y??(50+Math.random()*40),
+              state:false, out:{}, lit:false, val:0 };
+  comps.push(c);
+  renderComp(c);
+  evaluate();
+}
+
+function pinPos(c, side, pinDef){
+  const d = DEFS[c.type];
+  return { x: c.x + (side==='in'?0:d.w), y: c.y + pinDef.y };
+}
+
+//============================================================
+//  Rendern eines Moduls
+//============================================================
+function renderComp(c){
+  const d = DEFS[c.type];
+  const el = document.createElement('div');
+  el.className='comp'; el.dataset.id=c.id;
+  el.style.left = c.x+'px'; el.style.top = c.y+'px';
+  el.style.width = d.w+'px'; el.style.height = d.h+'px';
+
+  const body = document.createElement('div');
+  body.className='body'; body.style.width=d.w+'px'; body.style.height=d.h+'px';
+  el.appendChild(body);
+
+  // Lösch-Knopf
+  const x = document.createElement('div'); x.className='delx'; x.textContent='×';
+  x.onclick = (e)=>{ e.stopPropagation(); deleteComp(c.id); };
+  el.appendChild(x);
+
+  // Symbolkasten (Gatter)
+  if(d.sym){
+    const s = document.createElement('div'); s.className='sym';
+    const bw = d.w-30, bh = d.h-16;
+    s.style.left='12px'; s.style.top='8px'; s.style.width=bw+'px'; s.style.height=bh+'px';
+    s.style.fontSize = (d.sym.length>2?11:15)+'px';
+    s.textContent = d.sym;
+    body.appendChild(s);
+    if(d.neg){
+      const b=document.createElement('div'); b.className='negbubble';
+      b.style.right='12px'; b.style.top=(d.outs[0].y-4.5)+'px';
+      body.appendChild(b);
+    }
+  }
+
+  // 7-Segment
+  if(d.kind==='seg7'){
+    const sv = document.createElement('div'); sv.className='seg7';
+    sv.style.left='14px'; sv.style.top='10px';
+    sv.style.width=(d.w-28)+'px'; sv.style.height=(d.h-20)+'px';
+    sv.innerHTML = seg7svg();
+    body.appendChild(sv);
+  }
+
+  // Schalter-Knopf
+  if(d.kind==='switch'){
+    const k=document.createElement('div'); k.className='swknob';
+    k.style.left='10px'; k.style.top=(d.h/2-7.5)+'px';
+    k.dataset.knob='1';
+    body.appendChild(k);
+  }
+
+  // LED (Ausgangsmodul)
+  if(d.kind==='led'){
+    const l=document.createElement('div'); l.className='led';
+    l.style.left=(d.w/2-6.5)+'px'; l.style.top=(d.h/2-6.5)+'px';
+    l.dataset.led='1';
+    body.appendChild(l);
+  }
+
+  // Pins
+  [['in',d.ins],['out',d.outs]].forEach(([side,arr])=>{
+    arr.forEach(p=>{
+      const pin=document.createElement('div'); pin.className='pin';
+      pin.style.left=(side==='in'?0:d.w)+'px'; pin.style.top=p.y+'px';
+      pin.dataset.side=side; pin.dataset.pin=p.id;
+      pin.onmousedown=(e)=>e.stopPropagation();
+      pin.onclick=(e)=>{ e.stopPropagation(); onPin(c,side,p.id); };
+      el.appendChild(pin);
+      if(p.l){
+        const lb=document.createElement('div'); lb.className='pinlbl';
+        lb.textContent=p.l;
+        lb.style.top=p.y+'px';
+        if(side==='in'){ lb.style.left='6px'; } else { lb.style.right='6px'; }
+        body.appendChild(lb);
+      }
+    });
+  });
+
+  // Drag + Klick (Schalter togglen)
+  attachDrag(el, c);
+  board.appendChild(el);
+  c._el = el;
+}
+
+//============================================================
+//  Drag-Logik  (Klick vs. Ziehen unterscheiden)
+//============================================================
+function attachDrag(el, c){
+  const body = el.querySelector('.body');
+  body.addEventListener('mousedown', start);
+  body.addEventListener('touchstart', start, {passive:false});
+
+  function start(e){
+    if(e.target.classList.contains('pin')) return;
+    e.preventDefault();
+    const pt = point(e);
+    const ox = pt.x - c.x, oy = pt.y - c.y;
+    let moved=false;
+    el.classList.add('dragging');
+
+    function move(ev){
+      const p = point(ev);
+      const nx = p.x-ox, ny = p.y-oy;
+      if(Math.abs(nx-c.x)>3 || Math.abs(ny-c.y)>3) moved=true;
+      c.x=Math.max(0,nx); c.y=Math.max(0,ny);
+      el.style.left=c.x+'px'; el.style.top=c.y+'px';
+      drawWires();
+    }
+    function up(ev){
+      el.classList.remove('dragging');
+      document.removeEventListener('mousemove',move);
+      document.removeEventListener('mouseup',up);
+      document.removeEventListener('touchmove',move);
+      document.removeEventListener('touchend',up);
+      if(!moved){
+        // Klick → Schalter toggeln
+        if(c.type==='SWITCH'){ c.state=!c.state; evaluate(); }
+      }
+    }
+    document.addEventListener('mousemove',move);
+    document.addEventListener('mouseup',up);
+    document.addEventListener('touchmove',move,{passive:false});
+    document.addEventListener('touchend',up);
+  }
+}
+function point(e){
+  const r = board.getBoundingClientRect();
+  const t = e.touches?e.touches[0]:e;
+  return { x:t.clientX-r.left, y:t.clientY-r.top };
+}
+
+//============================================================
+//  Verdrahten
+//============================================================
+function onPin(c, side, pinId){
+  if(side==='out'){
+    arming = {c:c.id, pin:pinId};
+    refreshArmed();
+  } else {
+    if(!arming){ return; }
+    // Eingang darf nur eine Quelle haben → alte Leitung weg
+    wires = wires.filter(w=> !(w.to.c===c.id && w.to.pin===pinId));
+    wires.push({ id:uid++, from:{...arming}, to:{c:c.id,pin:pinId} });
+    arming=null; refreshArmed();
+    evaluate();
+  }
+}
+board.addEventListener('click',(e)=>{
+  if(e.target===board || e.target===svg){ arming=null; refreshArmed(); }
+});
+function refreshArmed(){
+  document.querySelectorAll('.pin.armed').forEach(p=>p.classList.remove('armed'));
+  if(arming){
+    const el = comps.find(c=>c.id===arming.c)?._el;
+    el?.querySelectorAll('.pin[data-side=out]').forEach(p=>{
+      if(p.dataset.pin===arming.pin) p.classList.add('armed');
+    });
+  }
+}
+
+function deleteComp(id){
+  const c = comps.find(c=>c.id===id);
+  c?._el?.remove();
+  comps = comps.filter(c=>c.id!==id);
+  wires = wires.filter(w=> w.from.c!==id && w.to.c!==id);
+  evaluate();
+}
+
+//============================================================
+//  Logik-Simulation  (iteratives Propagieren bis stabil)
+//============================================================
+function inputValue(c, pinId){
+  const w = wires.find(w=> w.to.c===c.id && w.to.pin===pinId);
+  if(!w) return 1;                       // offener Eingang = High (LS-TTL!)
+  const src = comps.find(c=>c.id===w.from.c);
+  return src ? (src.out[w.from.pin]?1:0) : 1;
+}
+function compute(c){
+  const d = DEFS[c.type];
+  switch(c.type){
+    case 'SWITCH': c.out.y = c.state?1:0; break;
+    case 'LED':    c.lit = inputValue(c,'a')===1; break;
+    case 'AND':  c.out.y = (inputValue(c,'a') & inputValue(c,'b'))?1:0; break;
+    case 'NAND': c.out.y = (inputValue(c,'a') & inputValue(c,'b'))?0:1; break;
+    case 'OR':   c.out.y = (inputValue(c,'a') | inputValue(c,'b'))?1:0; break;
+    case 'NOR':  c.out.y = (inputValue(c,'a') | inputValue(c,'b'))?0:1; break;
+    case 'NOT':  c.out.y = inputValue(c,'a')?0:1; break;
+    case 'MUX':{
+      const s=inputValue(c,'s');
+      c.out.y = s? inputValue(c,'d1') : inputValue(c,'d0'); break;
+    }
+    case 'FA':{
+      const a=inputValue(c,'a'),b=inputValue(c,'b'),ci=inputValue(c,'cin');
+      const sum=a+b+ci;
+      c.out.s = sum&1; c.out.cout = sum>1?1:0; break;
+    }
+    case 'SEG7':{
+      c.val = inputValue(c,'b0') + 2*inputValue(c,'b1') + 4*inputValue(c,'b2') + 8*inputValue(c,'b3');
+      break;
+    }
+  }
+}
+function evaluate(){
+  for(let it=0; it<80; it++){
+    let changed=false;
+    for(const c of comps){
+      const before = JSON.stringify(c.out);
+      compute(c);
+      if(JSON.stringify(c.out)!==before) changed=true;
+    }
+    if(!changed) break;
+  }
+  comps.forEach(c=>compute(c)); // LED/seg7 final
+  render();
+}
+
+//============================================================
+//  Darstellung aktualisieren
+//============================================================
+function render(){
+  comps.forEach(c=>{
+    const el=c._el; if(!el) return;
+    // Ausgangs-Pins heiß färben
+    el.querySelectorAll('.pin[data-side=out]').forEach(p=>{
+      p.classList.toggle('hot', c.out[p.dataset.pin]===1);
+    });
+    if(c.type==='SWITCH') el.querySelector('.swknob')?.classList.toggle('on',c.state);
+    if(c.type==='LED')    el.querySelector('.led')?.classList.toggle('on',c.lit);
+    if(c.type==='SEG7')   updateSeg7(el, c.val);
+  });
+  drawWires();
+  document.getElementById('stat').textContent =
+    `${comps.length} Bauteile · ${wires.length} Leitungen`;
+}
+
+function drawWires(){
+  svg.innerHTML='';
+  wires.forEach(w=>{
+    const src=comps.find(c=>c.id===w.from.c), dst=comps.find(c=>c.id===w.to.c);
+    if(!src||!dst) return;
+    const sp = pinPos(src,'out',DEFS[src.type].outs.find(p=>p.id===w.from.pin));
+    const dp = pinPos(dst,'in', DEFS[dst.type].ins.find(p=>p.id===w.to.pin));
+    const hot = src.out[w.from.pin]===1;
+    const dx = Math.max(30, Math.abs(dp.x-sp.x)*0.45);
+    const dpath = `M${sp.x},${sp.y} C${sp.x+dx},${sp.y} ${dp.x-dx},${dp.y} ${dp.x},${dp.y}`;
+    // Klick-Trefferfläche
+    const hit=ns('path'); hit.setAttribute('d',dpath); hit.setAttribute('class','hit');
+    hit.onclick=()=>{ wires=wires.filter(x=>x.id!==w.id); evaluate(); };
+    svg.appendChild(hit);
+    // sichtbare Leitung
+    const path=ns('path'); path.setAttribute('d',dpath);
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke', hot? 'var(--high)' : 'var(--low)');
+    path.setAttribute('stroke-width', hot?'3':'2.4');
+    path.setAttribute('stroke-linecap','round');
+    svg.appendChild(path);
+  });
+}
+function ns(t){ return document.createElementNS('http://www.w3.org/2000/svg',t); }
+
+//============================================================
+//  7-Segment-Anzeige
+//============================================================
+const SEG_MAP = { // a b c d e f g
+  0:'1111110',1:'0110000',2:'1101101',3:'1111001',4:'0110011',
+  5:'1011011',6:'1011111',7:'1110000',8:'1111111',9:'1111011',
+  10:'1110111',11:'0011111',12:'1001110',13:'0111101',14:'1001111',15:'1000111'
+};
+function seg7svg(){
+  // a,b,c,d,e,f,g
+  const segs = {
+    a:'M22,12 L58,12 L52,18 L28,18 Z',
+    b:'M60,14 L66,20 L66,46 L60,52 L56,46 L56,20 Z',
+    c:'M60,54 L66,60 L66,86 L60,92 L56,86 L56,60 Z',
+    d:'M28,88 L52,88 L58,94 L22,94 Z',
+    e:'M20,54 L24,60 L24,86 L20,92 L14,86 L14,60 Z',
+    f:'M20,14 L24,20 L24,46 L20,52 L14,46 L14,20 Z',
+    g:'M22,53 L58,53 L52,47 L52,47 L28,47 Z M28,47 L52,47 L58,53 L52,59 L28,59 L22,53 Z'
+  };
+  let p='';
+  for(const k of ['a','b','c','d','e','f','g'])
+    p+=`<path data-seg="${k}" d="${segs[k]}" fill="var(--seg-off)"/>`;
+  return `<svg viewBox="0 0 80 106" style="width:100%;height:100%">${p}</svg>`;
+}
+function updateSeg7(el, val){
+  const map = SEG_MAP[val]||'0000000';
+  const segs=['a','b','c','d','e','f','g'];
+  el.querySelectorAll('.seg7 path').forEach(p=>{
+    const i=segs.indexOf(p.dataset.seg);
+    p.setAttribute('fill', map[i]==='1'?'var(--seg-on)':'var(--seg-off)');
+  });
+}
+
+//============================================================
+//  Speichern / Laden / Löschen
+//============================================================
+document.getElementById('btnClear').onclick=()=>{
+  if(comps.length && !confirm('Wirklich alles löschen?')) return;
+  comps.forEach(c=>c._el?.remove()); comps=[]; wires=[]; arming=null; evaluate();
+};
+document.getElementById('btnExport').onclick=()=>{
+  const data={ uid, comps:comps.map(({_el,...r})=>r), wires };
+  const blob=new Blob([JSON.stringify(data,null,1)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='simulog-schaltung.json'; a.click();
+};
+const fileIn=document.getElementById('fileIn');
+document.getElementById('btnImport').onclick=()=>fileIn.click();
+fileIn.onchange=(e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    const d=JSON.parse(r.result);
+    comps.forEach(c=>c._el?.remove());
+    comps=d.comps.map(c=>({out:{},...c})); wires=d.wires||[]; uid=d.uid||1;
+    comps.forEach(renderComp); evaluate();
+  }catch(err){ alert('Datei konnte nicht gelesen werden.'); } };
+  r.readAsText(f); fileIn.value='';
+};
+
+//============================================================
+//  Startbeispiel:  A AND B  →  LED   (zeigt sofort, wie's geht)
+//============================================================
+(function demo(){
+  addComp('SWITCH', 60, 70);
+  addComp('SWITCH', 60, 150);
+  addComp('AND',   220, 95);
+  addComp('LED',   380, 102);
+  const sw1=comps[0], sw2=comps[1], and=comps[2], led=comps[3];
+  wires.push({id:uid++, from:{c:sw1.id,pin:'y'}, to:{c:and.id,pin:'a'}});
+  wires.push({id:uid++, from:{c:sw2.id,pin:'y'}, to:{c:and.id,pin:'b'}});
+  wires.push({id:uid++, from:{c:and.id,pin:'y'}, to:{c:led.id,pin:'a'}});
+  evaluate();
+})();
+</script>
+</body>
+</html>
